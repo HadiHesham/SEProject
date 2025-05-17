@@ -196,29 +196,6 @@ def transcribe_and_summarize(callback):
     callback("✅ Done! Meeting minutes saved.")
     os.startfile("meeting_minutes.txt")
 
-def delete_record(self, title, meeting_id, dialog=None):
-    table = title.lower()
-    if "transcriptions" in table:
-        db_table = "transcriptions"
-    elif "summaries" in table:
-        db_table = "summaries"
-    elif "recordings" in table:
-        db_table = "recordings"
-    else:
-        QMessageBox.warning(self, "Error", "Unknown content type.")
-        return
-
-    confirm = QMessageBox.question(
-        self, "Confirm Delete",
-        f"Are you sure you want to delete {title} for meeting {meeting_id}?",
-        QMessageBox.Yes | QMessageBox.No
-    )
-
-    if confirm == QMessageBox.Yes:
-        delete_record_from_db(db_table, meeting_id)
-        QMessageBox.information(self, "Deleted", f"{title} for meeting {meeting_id} has been deleted.")
-        if dialog:
-            dialog.close()
 
 
 class NotaBotApp(QWidget):
@@ -353,6 +330,40 @@ class NotaBotApp(QWidget):
         main_layout.addLayout(content_layout)
         self.setLayout(main_layout)
 
+    def delete_record(self, title, meeting_id, dialog=None):
+        # Determine which table to delete from based on the title
+        if "transcription" in title.lower():
+            table = "transcriptions"
+        elif "summary" in title.lower():
+            table = "summaries"
+        elif "recording" in title.lower():
+            table = "recordings"
+        else:
+            QMessageBox.warning(self, "Error", "Unknown content type.")
+            return
+
+        confirm = QMessageBox.question(
+            self, "Confirm Delete",
+            f"Are you sure you want to delete {title} for meeting {meeting_id}?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if confirm == QMessageBox.Yes:
+            try:
+                db = get_db()
+                cur = db.cursor()
+                # Use parameterized query to prevent SQL injection
+                cur.execute(f"DELETE FROM {table} WHERE meetingID = %s", (meeting_id,))
+                db.commit()
+                cur.close()
+                db.close()
+
+                QMessageBox.information(self, "Deleted", f"{title} for meeting {meeting_id} has been deleted.")
+                if dialog:
+                    dialog.close()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to delete record: {str(e)}")
+
     def get_latest_summary_text(self):
         try:
             db = get_db()
@@ -433,21 +444,24 @@ class NotaBotApp(QWidget):
         cur.close()
         db.close()
 
-        dialog = QDialog(self)
-        dialog.setWindowTitle(f"{title} for Meeting {meeting_id}")
-        layout = QVBoxLayout()
-        text_area = QTextEdit()
-        text_area.setReadOnly(True)
-        text_area.setText(result[0] if result else "No content found.")
-        layout.addWidget(text_area)
+        if result:
+            dialog = QDialog(self)
+            dialog.setWindowTitle(f"{title} for Meeting {meeting_id}")
+            layout = QVBoxLayout()
+            text_area = QTextEdit()
+            text_area.setReadOnly(True)
+            text_area.setText(result[0])
+            layout.addWidget(text_area)
 
-        delete_btn = QPushButton(f"Delete {title} for Meeting {meeting_id}")
-        delete_btn.clicked.connect(lambda: self.delete_record(title, meeting_id, dialog))
-        layout.addWidget(delete_btn)
+            delete_btn = QPushButton(f"Delete {title} for Meeting {meeting_id}")
+            delete_btn.clicked.connect(lambda: self.delete_record(title, meeting_id, dialog))
+            layout.addWidget(delete_btn)
 
-        dialog.setLayout(layout)
-        dialog.resize(500, 400)
-        dialog.exec_()
+            dialog.setLayout(layout)
+            dialog.resize(500, 400)
+            dialog.exec_()
+        else:
+            QMessageBox.information(self, title, "This content has been deleted")
 
     def show_recordings(self):
         query = "SELECT meetingID, upload_date FROM recordings WHERE meetingID IN (SELECT meetingID FROM meetings WHERE host_username = %s)"
